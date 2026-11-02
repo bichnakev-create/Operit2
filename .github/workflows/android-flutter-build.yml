@@ -94,6 +94,17 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install TypeScript and Plugin Dependencies
+        shell: pwsh
+        run: |
+          npm install -g typescript
+          npm install --prefix .ci-tools/typescript --no-audit --no-fund typescript@5.9.3
+          corepack enable
+          corepack prepare pnpm@10.7.0 --activate
+          cd plugins/packages/buildin/workflow
+          pnpm install --frozen-lockfile
+          cd ../../../..
+
       - name: Install Java
         uses: actions/setup-java@v4
         with:
