@@ -65,25 +65,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build-android:
-    needs: build-android-runtime
+  build-android-v8:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      RUSTFLAGS: -Awarnings
       RUST_TOOLCHAIN_VERSION: 1.95.0
-      FVM_VERSION: 4.3.0
-      OPERIT_ANDROID_V8_JOBS: "2"
+      OPERIT_ANDROID_V8_JOBS: "4"
+      NDK_VERSION: "28.2.13676358"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download Android terminal runtime
-        uses: actions/download-artifact@v4
-        with:
-          name: operit2-android-runtime-${{ github.sha }}
-          path: apps/flutter/app/android/app/src/main
 
       - name: Install LLVM 21 and Linux build dependencies
         run: |
@@ -103,6 +95,117 @@ jobs:
           done
 
           sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100 || true
+
+      - name: Install Android NDK r28c
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" --install "ndk;$NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          echo "OPERIT_ANDROID_V8_NDK=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: aarch64-linux-android
+
+      - name: Restore source-built Android V8 cache
+        id: v8-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            tools/release/work/android-v8
+            apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-ndk28-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+
+      - name: Build Android V8
+        if: steps.v8-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tools/release/work/android-v8
+          mkdir -p apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          python3 tools/build_scripts/prepare_android_v8.py \
+            --target aarch64-linux-android \
+            --env-file apps/flutter/native/operit-flutter-bridge/target/operit-v8/aarch64-linux-android.v8.env
+          cp apps/flutter/native/operit-flutter-bridge/target/operit-v8/aarch64-linux-android.v8.env tools/release/work/android-v8/aarch64-linux-android.env
+
+      - name: Save Android V8 cache
+        if: steps.v8-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            tools/release/work/android-v8
+            apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-ndk28-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+
+      - name: Upload Android V8 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operit2-android-v8-${{ github.sha }}
+          path: |
+            tools/release/work/android-v8
+            apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          if-no-files-found: error
+          retention-days: 1
+
+  build-android:
+    needs: [build-android-runtime, build-android-v8]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      RUSTFLAGS: -Awarnings
+      RUST_TOOLCHAIN_VERSION: 1.95.0
+      FVM_VERSION: 4.3.0
+      OPERIT_ANDROID_V8_JOBS: "4"
+      NDK_VERSION: "28.2.13676358"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Android terminal runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: operit2-android-runtime-${{ github.sha }}
+          path: apps/flutter/app/android/app/src/main
+
+      - name: Download Android V8 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: operit2-android-v8-${{ github.sha }}
+
+      - name: Restore source-built Android V8 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            tools/release/work/android-v8
+            apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-ndk28-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+
+      - name: Install LLVM 21 and Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build wget lsb-release gnupg software-properties-common
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21 all
+          sudo apt-get install -y llvm-21-dev libclang-21-dev lld-21 clang-21
+
+          for dir in /usr/lib/llvm-21/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
+            if [ -f "$dir/libclang.so" ] || [ -f "$dir/libclang.so.1" ]; then
+              target="$dir/libclang.so"
+              [ -f "$target" ] || target="$dir/libclang.so.1"
+              sudo ln -sf "$target" "$dir/libclang.so.21"
+            fi
+          done
+
+          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100 || true
+
+      - name: Install Android NDK r28c
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" --install "ndk;$NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          echo "OPERIT_ANDROID_V8_NDK=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
 
       - name: Install bootstrap Dart
         uses: dart-lang/setup-dart@v1
@@ -146,30 +249,17 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: aarch64-linux-android
 
-      # 1. Restore V8 from cache if it was compiled previously
-      - name: Restore source-built Android V8 cache
-        id: v8-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: tools/release/work/android-v8
-          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
-
-      # 2. Build V8 standalone if cache missed
-      - name: Build Android V8 (standalone)
-        if: steps.v8-cache.outputs.cache-hit != 'true'
+      - name: Ensure Android V8 env file is positioned
         run: |
-          mkdir -p tools/release/work/android-v8
+          mkdir -p apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          if [ -f tools/release/work/android-v8/aarch64-linux-android.env ]; then
+            cp -f tools/release/work/android-v8/aarch64-linux-android.env apps/flutter/native/operit-flutter-bridge/target/operit-v8/aarch64-linux-android.v8.env
+          fi
+          # Verifies the V8 cache matches Gradle's NDK; takes 0.1s when cached
           python3 tools/build_scripts/prepare_android_v8.py \
             --target aarch64-linux-android \
-            --env-file tools/release/work/android-v8/aarch64-linux-android.env
-
-      # 3. Immediately save V8 cache so you never re-compile it
-      - name: Save Android V8 cache
-        if: steps.v8-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: tools/release/work/android-v8
-          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+            --env-file apps/flutter/native/operit-flutter-bridge/target/operit-v8/aarch64-linux-android.v8.env
+          cat apps/flutter/native/operit-flutter-bridge/target/operit-v8/aarch64-linux-android.v8.env
 
       - name: Generate dummy Android keystore for unsigned build
         run: |
