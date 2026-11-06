@@ -65,14 +65,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build-android:
+    build-android:
     needs: build-android-runtime
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       RUSTFLAGS: -Awarnings
       RUST_TOOLCHAIN_VERSION: 1.95.0
       FVM_VERSION: 4.3.0
+      OPERIT_ANDROID_V8_JOBS: "2"
 
     steps:
       - name: Checkout
@@ -88,14 +89,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build wget lsb-release gnupg software-properties-common
-
-          # 1. Install LLVM 21 toolchain and libclang 21 from official repo
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 21 all
           sudo apt-get install -y llvm-21-dev libclang-21-dev lld-21 clang-21
 
-          # 2. Satisfy Operit2's 'libclang.so.(\d+) >= 21' regex check
           for dir in /usr/lib/llvm-21/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
             if [ -f "$dir/libclang.so" ] || [ -f "$dir/libclang.so.1" ]; then
               target="$dir/libclang.so"
@@ -104,9 +102,8 @@ jobs:
             fi
           done
 
-          # 3. Make lld-21 default on PATH
           sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100 || true
-          
+
       - name: Install bootstrap Dart
         uses: dart-lang/setup-dart@v1
         with:
@@ -149,8 +146,27 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: aarch64-linux-android
 
-      - name: Cache source-built Android V8
-        uses: actions/cache@v4
+      # Restore V8 cache if it was already built in a previous run
+      - name: Restore source-built Android V8 cache
+        id: v8-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tools/release/work/android-v8
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+
+      # Pre-build V8 if cache missed
+      - name: Build Android V8 (standalone)
+        if: steps.v8-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tools/release/work/android-v8
+          python3 tools/build_scripts/prepare_android_v8.py \
+            --target aarch64-linux-android \
+            --env-file tools/release/work/android-v8/aarch64-linux-android.env
+
+      # Save the V8 cache immediately once compiled
+      - name: Save Android V8 cache
+        if: steps.v8-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
           path: tools/release/work/android-v8
           key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
