@@ -88,16 +88,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build wget lsb-release gnupg software-properties-common
-          
-          # Install LLVM 21 toolchain and libclang 21 from official LLVM repo
+
+          # 1. Install LLVM 21 toolchain and libclang 21 from official repo
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 21 all
           sudo apt-get install -y llvm-21-dev libclang-21-dev lld-21 clang-21
 
-          # Make lld-21 default on PATH
-          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100 || true
+          # 2. Satisfy Operit2's 'libclang.so.(\d+) >= 21' regex check
+          for dir in /usr/lib/llvm-21/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
+            if [ -f "$dir/libclang.so" ] || [ -f "$dir/libclang.so.1" ]; then
+              target="$dir/libclang.so"
+              [ -f "$target" ] || target="$dir/libclang.so.1"
+              sudo ln -sf "$target" "$dir/libclang.so.21"
+            fi
+          done
 
+          # 3. Make lld-21 default on PATH
+          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100 || true
+          
       - name: Install bootstrap Dart
         uses: dart-lang/setup-dart@v1
         with:
